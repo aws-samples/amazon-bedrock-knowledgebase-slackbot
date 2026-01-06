@@ -1,0 +1,76 @@
+# Dependabot configuration for automatic dependency updates and security alerts
+# https://docs.github.com/en/code-security/dependabot
+
+version: 2
+updates:
+  # Enable version updates for npm (Node.js/TypeScript dependencies)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "security-team"
+    labels:
+      - "dependencies"
+      - "security"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    # Group updates to reduce PR noise
+    groups:
+      production-dependencies:
+        dependency-type: "production"
+      development-dependencies:
+        dependency-type: "development"
+    # Ignore major version updates (require manual review)
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # Enable version updates for pip (Python dependencies)
+  - package-ecosystem: "pip"
+    directory: "/lambda/BedrockKbSlackbotFunction"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "security-team"
+    labels:
+      - "dependencies"
+      - "security"
+      - "python"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    # Group updates
+    groups:
+      production-dependencies:
+        dependency-type: "production"
+    # Ignore major version updates
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # Enable version updates for GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "security-team"
+    labels:
+      - "dependencies"
+      - "security"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+

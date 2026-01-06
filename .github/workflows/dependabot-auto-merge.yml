@@ -1,0 +1,101 @@
+# Auto-merge Dependabot PRs for security patches
+# Only merges patches and minor updates, not major version changes
+name: Dependabot Auto-merge
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: Auto-merge Dependabot PRs
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Check if PR is a security update
+        id: check-security
+        run: |
+          if [[ "${{ github.event.pull_request.labels }}" == *"security"* ]]; then
+            echo "is_security=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_security=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check if PR is a patch or minor update
+        id: check-version
+        run: |
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          if [[ "$PR_TITLE" == *"patch"* ]] || [[ "$PR_TITLE" == *"minor"* ]] || [[ "$PR_TITLE" == *"security"* ]]; then
+            echo "is_safe_update=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_safe_update=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Wait for status checks
+        if: steps.check-security.outputs.is_security == 'true' || steps.check-version.outputs.is_safe_update == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+
+            // Wait for all status checks to pass
+            const maxWait = 300; // 5 minutes
+            const waitInterval = 10; // 10 seconds
+            let waited = 0;
+
+            while (waited < maxWait) {
+              const { data: status } = await github.rest.repos.getCombinedStatusForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: pr.head.sha,
+              });
+
+              if (status.state === 'success') {
+                console.log('All status checks passed');
+                break;
+              }
+
+              if (status.state === 'failure') {
+                throw new Error('Status checks failed');
+              }
+
+              await new Promise(resolve => setTimeout(resolve, waitInterval * 1000));
+              waited += waitInterval;
+            }
+
+      - name: Auto-merge PR
+        if: steps.check-security.outputs.is_security == 'true' || steps.check-version.outputs.is_safe_update == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.pulls.merge({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              merge_method: 'squash',
+            });
+
+      - name: Comment on PR
+        if: steps.check-security.outputs.is_security == 'true' || steps.check-version.outputs.is_safe_update == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '✅ This PR has been automatically merged after passing all security checks.',
+            });
+

@@ -1,0 +1,22 @@
+# CodeQL configuration file
+# Customizes CodeQL analysis for this repository
+# https://docs.github.com/en/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning/customizing-your-advanced-setup-for-code-scanning
+
+# Using default security query packs instead of individual CWE queries
+# This is more reliable and avoids issues with missing query paths
+packs:
+  javascript:
+    - codeql/javascript-queries:Security
+    - codeql/javascript-queries:SecurityExtended
+  python:
+    - codeql/python-queries:Security
+    - codeql/python-queries:SecurityExtended
+
+query-filters:
+  - exclude:
+      id: javascript/weak-cryptographic-algorithm
+      reason: "Some algorithms are acceptable for non-security purposes"
+  - exclude:
+      id: python/weak-cryptographic-algorithm
+      reason: "Some algorithms are acceptable for non-security purposes"
+

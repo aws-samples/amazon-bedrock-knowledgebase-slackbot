@@ -40,7 +40,7 @@ import * as ssm from 'aws-cdk-lib/aws-ssm';
 // Amazon Titan Models: "amazon.titan-text-premier-v1:0"
 // Anthropic Claude2  Models:  "anthropic.claude-instant-v1" || "anthropic.claude-v2:1"
 // Anthropic Claude3  Models:  "anthropic.claude-3-haiku-20240307-v1:0" || "anthropic.claude-3-sonnet-20240229-v1:0" || "anthropic.claude-3-5-sonnet-20240620-v1:0" 
-const RAG_MODEL_ID = "anthropic.claude-3-sonnet-20240229-v1:0";
+const RAG_MODEL_ID = "us.anthropic.claude-3-5-sonnet-20241022-v2:0";
 
 // RAG Embeddings Model ID (Update dependent on model access and AWS Regional Support):
 // Amazon Titan Embedding: "amazon.titan-embed-text-v1" || "amazon.titan-embed-text-v2:0"
@@ -107,7 +107,9 @@ export class AmazonBedrockKnowledgebaseSlackbotStack extends cdk.Stack {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL, 
       encryption: s3.BucketEncryption.S3_MANAGED,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
-      autoDeleteObjects: true, enforceSSL: true,
+      autoDeleteObjects: true, 
+      enforceSSL: true,
+      versioned: true, // Add versioning
     });
     NagSuppressions.addResourceSuppressions(s3Bucket, [
       { id: 'AwsSolutions-S1', reason: 'S3 access logging not required for sample code' }
@@ -228,7 +230,7 @@ export class AmazonBedrockKnowledgebaseSlackbotStack extends cdk.Stack {
     const GUARD_RAIL_ID = Guardrail.attrGuardrailId
     const GUARD_RAIL_VERSION = GuardrailVersion.attrVersion
     
-    //Define OpenSearchServerless Collection & depends on policies
+    // Define OpenSearchServerless Collection & depends on policies
     const osCollection = new ops.CfnCollection(this, 'osCollection', {
       name: COLLECTION_NAME,
       description: 'Slack bedrock vector db',
@@ -273,7 +275,7 @@ export class AmazonBedrockKnowledgebaseSlackbotStack extends cdk.Stack {
     });
     osCollection.addDependency(aossNetworkPolicy);
 
-    // Define createIndexFunction execution role and policy. Managed role 'AWSLambdaBasicExecutionRole'
+    // Define createIndexFunction execution role and policy
     const createIndexFunctionRole = new iam.Role(this, 'CreateIndexFunctionRole', {
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
     });
@@ -311,7 +313,7 @@ export class AmazonBedrockKnowledgebaseSlackbotStack extends cdk.Stack {
       role: createIndexFunctionRole
     });
 
-    // Define OpenSearchServerless access policy to access the index and collection from the Amazon Bedrock execution role and the lambda execution role
+    // Define OpenSearchServerless access policy
     const aossAccessPolicy = new ops.CfnAccessPolicy(this, 'aossAccessPolicy', {
       name: 'bedrock-kb-access-policy',
       type: 'data',
@@ -329,7 +331,6 @@ export class AmazonBedrockKnowledgebaseSlackbotStack extends cdk.Stack {
             Permission: ['aoss:*'],
           },
         ],
-        // Add principal of bedrock execution role and lambda execution role
         Principal: [
           bedrockExecutionRole.roleArn,
           createIndexFunction.role?.roleArn,
@@ -338,7 +339,6 @@ export class AmazonBedrockKnowledgebaseSlackbotStack extends cdk.Stack {
       }
     ]),
     });
-    //this.serverlessCollection = osCollection;
     osCollection.addDependency(aossAccessPolicy);
     
     const Endpoint = `${osCollection.attrId}.${cdk.Stack.of(this).region}.aoss.amazonaws.com`;
@@ -373,7 +373,6 @@ export class AmazonBedrockKnowledgebaseSlackbotStack extends cdk.Stack {
             Endpoint: Endpoint,
           }),
         },
-        //physicalResourceId: cr.PhysicalResourceId.of('vectorIndexResource'),
       },
       policy: cr.AwsCustomResourcePolicy.fromStatements([
         new iam.PolicyStatement({
@@ -384,8 +383,10 @@ export class AmazonBedrockKnowledgebaseSlackbotStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(60),
     });
 
-    // Ensure vectorIndex depends on collection
+    // Ensure vectorIndex depends on collection and access policy
     vectorIndex.node.addDependency(osCollection);
+    vectorIndex.node.addDependency(aossAccessPolicy);
+    vectorIndex.node.addDependency(createIndexFunction);
 
     // Define a Bedrock knowledge base with type opensearch serverless and titan for embedding model
     const bedrockkb = new bedrock.CfnKnowledgeBase(this, 'bedrockkb', {
@@ -411,12 +412,13 @@ export class AmazonBedrockKnowledgebaseSlackbotStack extends cdk.Stack {
         },
       },
     });
-    // add a dependency for bedrock kb on the custom resource. Enables vector index to be created before KB
-    bedrockkb.node.addDependency(vectorIndex)
-    bedrockkb.node.addDependency(createIndexFunction)
-    bedrockkb.node.addDependency(osCollection)
-    bedrockkb.node.addDependency(bedrockExecutionRole)
-    
+
+    // Add explicit dependencies for bedrock kb
+    bedrockkb.node.addDependency(vectorIndex);
+    bedrockkb.node.addDependency(osCollection);
+    bedrockkb.node.addDependency(aossAccessPolicy);
+    bedrockkb.node.addDependency(bedrockExecutionRole);
+
     // Define a bedrock knowledge base data source with S3 bucket
     const bedrockKbDataSource = new bedrock.CfnDataSource(this, 'bedrockKbDataSource', {
       name: BEDROCK_KB_DATA_SOURCE,
@@ -429,10 +431,32 @@ export class AmazonBedrockKnowledgebaseSlackbotStack extends cdk.Stack {
       }
     });
     
+    // Add explicit dependency to ensure data source is created after knowledge base
+    bedrockKbDataSource.node.addDependency(bedrockkb);
+    
     // Create an IAM policy to allow the lambda to invoke models in Amazon Bedrock
     const lambdaBedrockModelPolicy = new PolicyStatement()
     lambdaBedrockModelPolicy.addActions("bedrock:InvokeModel")
     lambdaBedrockModelPolicy.addResources(`arn:aws:bedrock:${cdk.Stack.of(this).region}::foundation-model/${RAG_MODEL_ID}`)
+    // Standard model pattern
+    lambdaBedrockModelPolicy.addResources("arn:aws:bedrock:*::foundation-model/*")
+    // Special model pattern with 'us.' prefix
+    lambdaBedrockModelPolicy.addResources(`arn:aws:bedrock:${cdk.Stack.of(this).region}:${cdk.Stack.of(this).account}:inference-profile/*`)
+    lambdaBedrockModelPolicy.addResources(`arn:aws:bedrock:${cdk.Stack.of(this).region}:${cdk.Stack.of(this).account}:*/*`)
+    lambdaBedrockModelPolicy.addCondition("StringEquals", {"aws:ResourceAccount": this.account})
+
+    // Add explicit permissions for RetrieveAndGenerate operation
+    const lambdaBedrockOperationsPolicy = new PolicyStatement()
+    lambdaBedrockOperationsPolicy.addActions(
+      "bedrock:InvokeModel",
+      "bedrock:Retrieve",
+      "bedrock:RetrieveAndGenerate",
+      "bedrock:GetFoundationModel",
+      "bedrock:ListFoundationModels",
+      "bedrock:GetInferenceProfile"
+    )
+    lambdaBedrockOperationsPolicy.addResources("*")
+    lambdaBedrockOperationsPolicy.addCondition("StringEquals", {"aws:ResourceAccount": this.account})
 
     // Create an IAM policy to allow the lambda to call Retrieve and Retrieve and Generate on a Bedrock Knowledge Base 
     const lambdaBedrockKbPolicy = new PolicyStatement();
@@ -440,26 +464,16 @@ export class AmazonBedrockKnowledgebaseSlackbotStack extends cdk.Stack {
     lambdaBedrockKbPolicy.addActions("bedrock:RetrieveAndGenerate");
     lambdaBedrockKbPolicy.addResources(`arn:aws:bedrock:${cdk.Stack.of(this).region}:${cdk.Stack.of(this).account}:knowledge-base/${bedrockkb.attrKnowledgeBaseId}`);
 
-    // Create an IAM policy to allow the lambda to call SSM
-    const lambdaSSMPolicy = new PolicyStatement();
-    lambdaSSMPolicy.addActions("ssm:GetParameter");
-    //lambdaSSMPolicy.addActions("ssm:GetParameters");
-    // lambdaSSMPolicy.addResources("botTokenParameter.parameterArn");
-    // lambdaSSMPolicy.addResources("signingBotSecretParameter.parameterArn");
-    lambdaSSMPolicy.addResources(`arn:aws:ssm:${cdk.Stack.of(this).region}:${cdk.Stack.of(this).account}:parameter${botTokenParameter.parameterName}`);
-    lambdaSSMPolicy.addResources(`arn:aws:ssm:${cdk.Stack.of(this).region}:${cdk.Stack.of(this).account}:parameter${signingSecretParameter.parameterName}`);
-    
-    //arn:aws:ssm:us-east-1:859498851685:parameter/slack/bot-token/parameter
-    //"arn:aws:ssm:us-east-2:123456789012:parameter/prod-*"
-    //(`arn:aws:bedrock:${cdk.Stack.of(this).region}:${cdk.Stack.of(this).account}:knowledge-base/${bedrockkb.attrKnowledgeBaseId}`);
-  
-    const lambdaReinvokePolicy = new PolicyStatement();
-    lambdaReinvokePolicy.addActions("lambda:InvokeFunction");
-    lambdaReinvokePolicy.addResources(`arn:aws:lambda:${cdk.Stack.of(this).region}:${cdk.Stack.of(this).account}:function:AmazonBedrock*`);
-
-    const lambdaGRinvokePolicy = new PolicyStatement();
-    lambdaGRinvokePolicy.addActions("bedrock:ApplyGuardrail");
-    lambdaGRinvokePolicy.addResources(`arn:aws:bedrock:${cdk.Stack.of(this).region}:${cdk.Stack.of(this).account}:guardrail/*`);
+    // Additional permissions for models like Claude 3.5 Sonnet
+    const lambdaBedrockAdditionalModelPolicy = new PolicyStatement()
+    lambdaBedrockAdditionalModelPolicy.addActions(
+      "bedrock:GetInferenceProfile",
+      "bedrock:ListInferenceProfiles",
+      "bedrock:InvokeModel",
+      "bedrock:GetModelInvocationLoggingConfiguration"
+    )
+    lambdaBedrockAdditionalModelPolicy.addResources("*")
+    lambdaBedrockAdditionalModelPolicy.addCondition("StringEquals", {"aws:ResourceAccount": this.account})
 
     // Create the SlackDot (slash command) integration to Amazon Bedrock Knowledge base responses. 
     const bedrockKbSlackbotFunction = new lambda.Function(this, 'BedrockKbSlackbotFunction', {
@@ -510,34 +524,77 @@ export class AmazonBedrockKnowledgebaseSlackbotStack extends cdk.Stack {
 
     // Attach listed IAM policies to the Lambda functions Execution role
     bedrockKbSlackbotFunction.addToRolePolicy(lambdaBedrockModelPolicy)
+    bedrockKbSlackbotFunction.addToRolePolicy(lambdaBedrockOperationsPolicy)
     bedrockKbSlackbotFunction.addToRolePolicy(lambdaBedrockKbPolicy)
-    bedrockKbSlackbotFunction.addToRolePolicy(lambdaReinvokePolicy)
-    bedrockKbSlackbotFunction.addToRolePolicy(lambdaGRinvokePolicy)
-    bedrockKbSlackbotFunction.addToRolePolicy(lambdaSSMPolicy)
+    bedrockKbSlackbotFunction.addToRolePolicy(lambdaBedrockAdditionalModelPolicy)  // Add additional permissions only
+    
+    // Grant SSM Parameter Store read permissions (secrets are accessed via SSM)
+    bedrockKbSlackbotFunction.addToRolePolicy(new PolicyStatement({
+      actions: ['ssm:GetParameter', 'ssm:GetParameters'],
+      resources: [
+        botTokenParameter.parameterArn,
+        signingSecretParameter.parameterArn
+      ],
+      effect: iam.Effect.ALLOW
+    }))
 
-    // Define the API Gateway resource and associate the trigger for Industrial Query Lambda function
-    const bedrockKbSlackbotApi = new apigateway.LambdaRestApi(this, 'BedrockKbSlackbotApi', {
-      handler: bedrockKbSlackbotFunction,
-      deployOptions: {
-        accessLogDestination: new apigateway.LogGroupLogDestination(new logs.LogGroup(this, 'BedrockKbSlackbotApiLogGroup')),
-        accessLogFormat: apigateway.AccessLogFormat.jsonWithStandardFields({
-          caller: false,
-          httpMethod: true,
-          ip: true,
-          protocol: true,
-          requestTime: true,
-          resourcePath: true,
-          responseLength: true,
-          status: true,
-          user: true,
-        })
-      },
-      proxy: false
+    // Create an IAM role for API Gateway CloudWatch Logs
+    const apiGatewayLogsRole = new iam.Role(this, 'ApiGatewayLogsRole', {
+      assumedBy: new iam.ServicePrincipal('apigateway.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonAPIGatewayPushToCloudWatchLogs')
+      ]
     });
 
-    // Define the '/industrial/query' API resource with a POST method
-    const bedrockKbSlackbotResource = bedrockKbSlackbotApi.root.addResource('slack').addResource('ask-aws');
-    bedrockKbSlackbotResource.addMethod('POST')
+    // Configure account-level API Gateway logging setting
+    const apiGatewayAccountConfig = new apigateway.CfnAccount(this, 'ApiGatewayAccount', {
+      cloudWatchRoleArn: apiGatewayLogsRole.roleArn
+    });
+
+    // Create a single log group instance
+    const apiGatewayLogGroup = new logs.LogGroup(this, 'ApiGatewayAccessLogs', {
+      retention: logs.RetentionDays.ONE_WEEK, // Add log retention policy
+      removalPolicy: cdk.RemovalPolicy.DESTROY
+    });
+
+    // Create API Gateway with CloudWatch logging enabled
+    const api = new apigateway.RestApi(this, 'BedrockKbSlackbotApi', {
+      deployOptions: {
+        stageName: 'prod',
+        loggingLevel: apigateway.MethodLoggingLevel.INFO,
+        dataTraceEnabled: true,
+        metricsEnabled: true,
+        tracingEnabled: true,
+        accessLogDestination: new apigateway.LogGroupLogDestination(apiGatewayLogGroup),
+        accessLogFormat: apigateway.AccessLogFormat.jsonWithStandardFields()
+      }
+    });
+    
+    // Ensure that API Gateway depends on the account configuration
+    api.node.addDependency(apiGatewayAccountConfig);
+
+    // Add access log settings to the API Gateway stage, but without CloudWatchRoleArn
+    const stage = api.deploymentStage.node.defaultChild as apigateway.CfnStage;
+    stage.addPropertyOverride('AccessLogSetting', {
+      DestinationArn: apiGatewayLogGroup.logGroupArn,
+      Format: JSON.stringify({
+        requestId: '$context.requestId',
+        ip: '$context.identity.sourceIp',
+        caller: '$context.identity.caller',
+        user: '$context.identity.user',
+        requestTime: '$context.requestTime',
+        httpMethod: '$context.httpMethod',
+        resourcePath: '$context.resourcePath',
+        status: '$context.status',
+        protocol: '$context.protocol',
+        responseLength: '$context.responseLength'
+      })
+    });
+    stage.addPropertyOverride('TracingEnabled', true);
+
+    // Define the '/slack/ask-aws' API resource with a POST method
+    const bedrockKbSlackbotResource = api.root.addResource('slack').addResource('ask-aws');
+    bedrockKbSlackbotResource.addMethod('POST', new apigateway.LambdaIntegration(bedrockKbSlackbotFunction));
 
     // CDK NAG Suppression Rules - IAM
     //============================================
@@ -587,6 +644,30 @@ export class AmazonBedrockKnowledgebaseSlackbotStack extends cdk.Stack {
         { id: 'AwsSolutions-APIG6', reason: 'Logging is enabled for the API' },
         { id: 'AwsSolutions-APIG4', reason: 'API Auth is not provided in demo/sample code' },
         { id: 'AwsSolutions-COG4', reason: 'Cognito is not being used in the sample code' }
+      ]
+    );
+
+    // Additional CDK NAG Suppression Rules
+    //============================================
+    NagSuppressions.addResourceSuppressionsByPath(
+      this,
+      [
+        '/AmazonBedrockKnowledgebaseSlackbotStack/ApiGatewayLogsRole/Resource',
+      ],
+      [
+        { id: 'AwsSolutions-IAM4', reason: 'AWS managed policy is required for API Gateway CloudWatch logs' },
+      ]
+    );
+
+    // Suppress CdkNagValidationFailure for Custom Resource
+    NagSuppressions.addResourceSuppressionsByPath(
+      this,
+      [
+        '/AmazonBedrockKnowledgebaseSlackbotStack/AWS679f53fac002430cb0da5b7982bd2287/Resource',
+      ],
+      [
+        { id: 'AwsSolutions-L1', reason: 'Custom resource is required for vector index creation' },
+        { id: 'CdkNagValidationFailure', reason: 'Suppressing validation error for intrinsic functions' },
       ]
     );
 

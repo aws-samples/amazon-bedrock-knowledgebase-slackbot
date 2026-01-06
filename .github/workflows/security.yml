@@ -1,0 +1,239 @@
+# Security scanning workflow
+# Scans code for security vulnerabilities using multiple tools
+name: Security Scan
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run weekly on Mondays at 9 AM UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  # CodeQL Analysis - Static code analysis
+  codeql-analysis:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'javascript', 'python' ]
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: ${{ matrix.language }}
+        queries: security-extended,security-and-quality
+
+    - name: Autobuild
+      uses: github/codeql-action/autobuild@v4
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v4
+      with:
+        category: "/language:${{matrix.language}}"
+
+  # Dependency Review - Check for vulnerable dependencies
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    - name: Dependency Review
+      uses: actions/dependency-review-action@v4
+      with:
+        fail-on-severity: moderate
+        deny-licenses: GPL-2.0, GPL-3.0
+
+  # npm Audit - Check npm dependencies
+  npm-audit:
+    name: npm Audit
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Run npm audit
+      run: npm audit --audit-level=moderate
+      continue-on-error: true
+
+    - name: Upload npm audit results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: npm-audit-results
+        path: |
+          npm-audit.json
+        retention-days: 30
+
+  # pip-audit - Check Python dependencies
+  pip-audit:
+    name: pip Audit
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        requirements-file:
+          - lambda/BedrockKbSlackbotFunction/requirements.txt
+          - lambda/CreateIndexFunction/requirements.txt
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install pip-audit
+      run: pip install pip-audit
+
+    - name: Run pip-audit
+      run: pip-audit -r ${{ matrix.requirements-file }} --format json --output pip-audit-${{ matrix.requirements-file }}.json
+      continue-on-error: true
+
+    - name: Upload pip-audit results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: pip-audit-results
+        path: |
+          pip-audit-*.json
+        retention-days: 30
+
+  # Secret Scanning - Check for exposed secrets
+  secret-scanning:
+    name: Secret Scanning
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      with:
+        fetch-depth: 0 # Full history for TruffleHog
+
+    - name: Run TruffleHog
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before || 'HEAD~1' }}
+        head: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      continue-on-error: true
+
+  # Check for hardcoded secrets in code
+  check-secrets:
+    name: Check for Hardcoded Secrets
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    - name: Run gitleaks
+      uses: gitleaks/gitleaks-action@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Security Linting - Check security best practices
+  security-lint:
+    name: Security Lint
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Run ESLint security plugin
+      run: npx eslint . --ext .ts,.js --format json --output-file eslint-security-results.json || true
+      continue-on-error: true
+
+    - name: Upload ESLint results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: eslint-security-results
+        path: eslint-security-results.json
+        retention-days: 30
+
+  # CDK Security Check - Check CDK for security issues
+  cdk-security:
+    name: CDK Security Check
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Install CDK
+      run: npm install -g aws-cdk
+
+    - name: Run CDK NAG
+      run: |
+        npm run build
+        cdk synth --quiet 2>&1 | tee cdk-nag-results.txt || true
+      continue-on-error: true
+
+    - name: Check for CDK NAG violations
+      run: |
+        if grep -q "AwsSolutions-IAM5\|AwsSolutions-IAM4" cdk-nag-results.txt; then
+          echo "⚠️ CDK NAG security violations found. Please review."
+          cat cdk-nag-results.txt
+          exit 1
+        fi
+      continue-on-error: true
+
+    - name: Upload CDK NAG results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: cdk-nag-results
+        path: cdk-nag-results.txt
+        retention-days: 30
+

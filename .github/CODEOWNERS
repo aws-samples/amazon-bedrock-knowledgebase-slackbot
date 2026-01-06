@@ -1,0 +1,35 @@
+# CODEOWNERS file
+# This file defines code owners for automatic PR review requests
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Global owners - all files require review from security team
+* @security-team
+
+# Infrastructure as Code (CDK)
+/lib/ @devops-team @security-team
+/bin/ @devops-team @security-team
+/cdk.json @devops-team @security-team
+
+# Lambda Functions
+/lambda/ @backend-team @security-team
+
+# Security-related files
+/.github/SECURITY.md @security-team
+/.github/dependabot.yml @security-team
+/.github/workflows/security.yml @security-team
+/.github/workflows/dependency-review.yml @security-team
+/.cursorrules @security-team
+
+# Configuration files
+/package.json @backend-team @security-team
+/package-lock.json @backend-team @security-team
+/requirements.txt @backend-team @security-team
+
+# Documentation
+/README.md @documentation-team
+/CONTRIBUTING.md @security-team @documentation-team
+/LICENSE @legal-team
+
+# Scripts
+/scripts/ @devops-team @security-team
+

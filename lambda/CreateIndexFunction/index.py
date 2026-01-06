@@ -8,7 +8,6 @@ main(['install', '-I', '-q','boto3','requests','opensearch-py==2.4.2', 'urllib3'
 sys.path.insert(0,'/tmp/')
 
 import boto3
-import requests
 from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
 from botocore.exceptions import NoCredentialsError
 

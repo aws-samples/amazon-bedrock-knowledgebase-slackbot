@@ -28,7 +28,21 @@ from slack_bolt.adapter.aws_lambda import SlackRequestHandler
 
 # Get params from SSM
 def get_parameter(parameter_name):
+    """
+    Retrieve a parameter from SSM Parameter Store securely.
+    
+    Args:
+        parameter_name: Name of the SSM parameter to retrieve
+        
+    Returns:
+        The decrypted parameter value
+        
+    Raises:
+        Exception: If parameter retrieval fails
+    """
     ssm = boto3.client('ssm')
+    logger = logging.getLogger()
+    
     try:
         response = ssm.get_parameter(
             Name=parameter_name,
@@ -48,7 +62,9 @@ def get_parameter(parameter_name):
             return parameter_value
             
     except Exception as e:
-        print(f"Error getting parameter {parameter_name}: {str(e)}")
+        # Security: Do not log parameter names or error details that might contain sensitive information
+        # Use exc_info=True to log stack trace without exposing parameter name
+        logger.error("Error retrieving parameter from SSM Parameter Store", exc_info=True)
         raise e
 
 # Get parameter names from environment variables
@@ -158,7 +174,9 @@ def get_bedrock_knowledgebase_response(user_query):
   response = client.retrieve_and_generate(
     input=input, retrieveAndGenerateConfiguration=config
   )
-  logging.info(f"Bedrock Knowledge Base Response: {response}")
+  # Security: Do not log full response as it may contain sensitive information
+  # Only log response metadata, not the actual content
+  logging.info("Bedrock Knowledge Base Response received successfully")
   return response
 
 # Init the Slack Slash '/' command handler.
