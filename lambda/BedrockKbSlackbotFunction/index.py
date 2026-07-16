@@ -22,6 +22,7 @@ __author__ = "Dean Colcott <https://www.linkedin.com/in/deancolcott/>"
 import os
 import json
 import boto3
+from botocore.config import Config
 import logging
 from slack_bolt import App
 from slack_bolt.adapter.aws_lambda import SlackRequestHandler
@@ -140,7 +141,8 @@ def get_bedrock_knowledgebase_response(user_query):
   # Initialise the bedrock-runtime client (in default / running region).
   client = boto3.client(
     service_name='bedrock-agent-runtime',
-    region_name=AWS_REGION
+    region_name=AWS_REGION,
+    config=Config(user_agent_extra='aws-samples-slackbot/bedrock-kb'),
   )
 
   #Create the RetrieveAndGenerateCommand input with the user query.
@@ -177,7 +179,8 @@ def get_bedrock_managed_kb_response(user_query):
 
   client = boto3.client(
     service_name='bedrock-agent-runtime',
-    region_name=AWS_REGION
+    region_name=AWS_REGION,
+    config=Config(user_agent_extra='aws-samples-slackbot/bedrock-kb'),
   )
 
   use_agentic = os.environ.get('USE_AGENTIC_RETRIEVAL', 'true').lower() == 'true'
